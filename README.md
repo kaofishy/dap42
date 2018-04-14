@@ -8,39 +8,17 @@ This project is currently in alpha - features generally do 80% of what's needed,
 * [Serial Wire Debug](http://www.arm.com/products/system-ip/debug-trace/coresight-soc-components/serial-wire-debug.php) (SWD) access over [CMSIS-DAP 1.0](http://www.arm.com/products/processors/cortex-m/cortex-microcontroller-software-interface-standard.php) HID interface (tested with [OpenOCD](http://openocd.org) and [LPCXpresso](https://www.lpcware.com/lpcxpresso))
 * CDC-ACM USB-serial bridge
 * [Device Firmware Upgrade](http://www.usb.org/developers/docs/devclass_docs/DFU_1.1.pdf) (DFU) over USB (detach-only, switches to on-chip [DFuSe](http://dfu-util.sourceforge.net/dfuse.html) bootloader).
+* [Serial Line CAN](http://lxr.free-electrons.com/source/drivers/net/can/slcan.c) (SLCAN) interface - Silent mode, RX only.
 
 ## Flash instructions
-In general, the firmware can be uploaded over USB DFU without any extra hardware:
-* Unflashed STM32F04x chips always start in the DFU bootloader.
-* The bootloader button can be used to force the chip to start from the bootloader on reset (unless disabled)
-* The firmware supports the DFU_DETACH request to switch to the bootloader
-* When the firmware is reset by the watchdog, it enables the bootloader to ensure that firmware that consistently hard-faults or hangs can always upload new firmware.
-
 The default method to upload new firmware is via [dfu-util](http://dfu-util.sourceforge.net/). The Makefile includes the `dfuse-flash` target to invoke dfu-util. dfu-util automatically detaches the dap42 firmware and uploads the firmware through the on-chip bootloader.
+
+To flash via another debugger, use `make flash`.
+
+For detailed flashing instructions, see [FLASHING.md](./FLASHING.md)
 
 ### STM32F103
 The dap42 firmware can experimentally also target the STM32F103 chip. The CDC UART is connected to `PB11` (the `SWIM` pin on certain STLink/v2 knockoff designs) as an RX-only input.
-
-To flash directly without a bootloader:
-
-    make clean
-    make TARGET=STM32F103
-    make TARGET=STM32F103 flash
-
-To load onto a device with the [dapboot](https://github.com/devanlai/dapboot) DFU bootloader installed:
-
-    make clean
-    make TARGET=STM32F103-DFUBOOT
-    dfu-util -d 1209:da42,1209:db42 -D DAP42.bin
-
-To flash a pre-built binary onto an STLink/v2:
-
-    openocd -f interface/cmsis-dap.cfg -f target/stm32f1x.cfg \
-        -c "init; reset halt" \
-        -c "stm32f1x unlock 0; reset halt" \
-        -c "flash erase_sector 0 0 last" \
-        -c "program DAP103-dapboot-combined-stlink.bin verify reset exit 0x08000000"
-
 
 ## Usage
 ### OpenOCD
@@ -81,7 +59,6 @@ To prevent this, you can define a custom udev rule to ensure that the modem mana
 * CMSIS-DAP 1.10 support
  * Command queueing (command level, not packet level)
  * [Serial Wire Output](http://infocenter.arm.com/help/index.jsp?topic=/com.arm.doc.ddi0314h/Chdfgefg.html) (SWO) trace support
-* [Serial Line CAN](http://lxr.free-electrons.com/source/drivers/net/can/slcan.c) (SLCAN) interface - Silent mode, RX only.
 * [Media Transfer Protocol](https://en.wikipedia.org/wiki/Media_Transfer_Protocol) (MTP) interface or [Mass Storage Device](https://en.wikipedia.org/wiki/USB_mass_storage_device_class) (MSD) interface for drag-n-drop target firmware flashing
 
 ### Hardware

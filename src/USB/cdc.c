@@ -26,8 +26,12 @@
 #include "cdc.h"
 
 #include "console.h"
+#include "tick.h"
 
 #if CDC_AVAILABLE
+
+_Static_assert((CONSOLE_TX_BUFFER_SIZE >= USB_CDC_MAX_PACKET_SIZE),
+               "TX buffer too small");
 
 /* Descriptors */
 const struct cdc_acm_functional_descriptors cdc_acm_functional_descriptors = {
@@ -62,12 +66,39 @@ const struct cdc_acm_functional_descriptors cdc_acm_functional_descriptors = {
 
 /* User callbacks */
 static HostOutFunction cdc_rx_callback = NULL;
-static HostInFunction cdc_tx_callback = NULL;
 static SetControlLineStateFunction cdc_set_control_line_state_callback = NULL;
 static SetLineCodingFunction cdc_set_line_coding_callback = NULL;
 static GetLineCodingFunction cdc_get_line_coding_callback = NULL;
 
+static usbd_device* cdc_usbd_dev;
+
+static void cdc_set_config(usbd_device *usbd_dev, uint16_t wValue);
+
+void cdc_setup(usbd_device* usbd_dev,
+               HostOutFunction cdc_rx_cb,
+               SetControlLineStateFunction set_control_line_state_cb,
+               SetLineCodingFunction set_line_coding_cb,
+               GetLineCodingFunction get_line_coding_cb) {
+    cdc_usbd_dev = usbd_dev;
+    cdc_rx_callback = cdc_rx_cb;
+    cdc_set_control_line_state_callback = set_control_line_state_cb,
+    cdc_set_line_coding_callback = set_line_coding_cb;
+    cdc_get_line_coding_callback = get_line_coding_cb;
+
+    cmp_usb_register_set_config_callback(cdc_set_config);
+}
+
 /* Generic CDC-ACM functionality */
+
+bool cdc_send_data(const uint8_t* data, size_t len) {
+    if (!cmp_usb_configured()) {
+        return false;
+    }
+    uint16_t sent = usbd_ep_write_packet(cdc_usbd_dev, ENDP_CDC_DATA_IN,
+                                         (const void*)data,
+                                         (uint16_t)len);
+    return (sent != 0);
+}
 
 static int cdc_control_class_request(usbd_device *usbd_dev,
                                      struct usb_setup_data *req,
@@ -143,53 +174,56 @@ static int cdc_control_class_request(usbd_device *usbd_dev,
     return status;
 }
 
-/* Receive data from the host */
-static void cdc_bulk_data_out(usbd_device *usbd_dev, uint8_t ep) {
-    uint8_t buf[USB_CDC_MAX_PACKET_SIZE];
-    uint16_t len = usbd_ep_read_packet(usbd_dev, ep, (void*)buf, sizeof(buf));
-    if (len > 0 && (cdc_rx_callback != NULL)) {
-        cdc_rx_callback(buf, len);
+/* CDC-ACM RX flow control */
+static bool cdc_rx_stalled = false;
+static void cdc_set_nak(void) {
+    if (!cdc_rx_stalled) {
+        usbd_ep_nak_set(cdc_usbd_dev, ENDP_CDC_DATA_OUT, true);
+        cdc_rx_stalled = true;
     }
 }
+
+static void cdc_clear_nak(void) {
+    if (cdc_rx_stalled) {
+        usbd_ep_nak_set(cdc_usbd_dev, ENDP_CDC_DATA_OUT, false);
+        cdc_rx_stalled = false;
+    }
+}
+
+/* Receive data from the host */
+static void cdc_bulk_data_out(usbd_device *usbd_dev, uint8_t ep) {
+    // Force NAK to prevent the USB controller from accepting a second
+    // packet before we've processed this one to decide if have space
+    // to accept more packets.
+    cdc_set_nak();
+
+    uint8_t buf[USB_CDC_MAX_PACKET_SIZE];
+    uint16_t len = usbd_ep_read_packet(usbd_dev, ep, (void*)buf, sizeof(buf));
+    bool accept_more_packets = true;
+    if (len > 0 && (cdc_rx_callback != NULL)) {
+        accept_more_packets = cdc_rx_callback(buf, len);
+    }
+
+    // Handle flow control
+    if (accept_more_packets) {
+        cdc_clear_nak();
+    }
+}
+
+static void cdc_bulk_data_in(usbd_device *usbd_dev, uint8_t ep);
+static void cdc_start_in_transfer(void);
 
 static void cdc_set_config(usbd_device *usbd_dev, uint16_t wValue) {
     (void)wValue;
 
     usbd_ep_setup(usbd_dev, ENDP_CDC_DATA_OUT, USB_ENDPOINT_ATTR_BULK, 64,
                   cdc_bulk_data_out);
-    usbd_ep_setup(usbd_dev, ENDP_CDC_DATA_IN, USB_ENDPOINT_ATTR_BULK, 64, NULL);
+    usbd_ep_setup(usbd_dev, ENDP_CDC_DATA_IN, USB_ENDPOINT_ATTR_BULK, 64, cdc_bulk_data_in);
     usbd_ep_setup(usbd_dev, ENDP_CDC_COMM_IN, USB_ENDPOINT_ATTR_INTERRUPT, 16, NULL);
 
     cmp_usb_register_control_class_callback(INTF_CDC_DATA, cdc_control_class_request);
     cmp_usb_register_control_class_callback(INTF_CDC_COMM, cdc_control_class_request);
-}
-
-static usbd_device* cdc_usbd_dev;
-
-void cdc_setup(usbd_device* usbd_dev,
-               HostInFunction cdc_tx_cb,
-               HostOutFunction cdc_rx_cb,
-               SetControlLineStateFunction set_control_line_state_cb,
-               SetLineCodingFunction set_line_coding_cb,
-               GetLineCodingFunction get_line_coding_cb) {
-    cdc_usbd_dev = usbd_dev;
-    cdc_tx_callback = cdc_tx_cb;
-    cdc_rx_callback = cdc_rx_cb;
-    cdc_set_control_line_state_callback = set_control_line_state_cb,
-    cdc_set_line_coding_callback = set_line_coding_cb;
-    cdc_get_line_coding_callback = get_line_coding_cb;
-
-    cmp_usb_register_set_config_callback(cdc_set_config);
-}
-
-bool cdc_send_data(const uint8_t* data, size_t len) {
-    if (!cmp_usb_configured()) {
-        return false;
-    }
-    uint16_t sent = usbd_ep_write_packet(cdc_usbd_dev, ENDP_CDC_DATA_IN,
-                                         (const void*)data,
-                                         (uint16_t)len);
-    return (sent != 0);
+    cmp_usb_register_sof_callback(cdc_start_in_transfer);
 }
 
 /* CDC-ACM USB UART bridge functionality */
@@ -262,25 +296,26 @@ static bool cdc_uart_get_line_coding(struct usb_cdc_line_coding* line_coding) {
     return true;
 }
 
-static void cdc_uart_on_host_tx(uint8_t* data, uint16_t len) {
+static bool cdc_uart_on_host_tx(uint8_t* data, uint16_t len) {
     console_send_buffered(data, (size_t)len);
     if (cdc_uart_rx_callback) {
         cdc_uart_rx_callback();
     }
-}
 
-static void cdc_uart_on_host_rx(uint8_t* data, uint16_t* len) {
-    *len = (uint16_t)console_recv_buffered(data, USB_CDC_MAX_PACKET_SIZE);
-    if (cdc_uart_tx_callback) {
-        cdc_uart_tx_callback();
-    }
+    return (console_send_buffer_space() >= USB_CDC_MAX_PACKET_SIZE);
 }
 
 static uint16_t packet_len = 0;
 static uint8_t packet_buffer[USB_CDC_MAX_PACKET_SIZE];
+static uint32_t packet_timeout = 0;
+static uint32_t packet_timestamp = 0;
+static bool need_zlp = false;
 
 void cdc_uart_app_reset(void) {
     packet_len = 0;
+    packet_timestamp = get_ticks();
+    need_zlp = false;
+    cdc_clear_nak();
 }
 
 void cdc_uart_app_setup(usbd_device* usbd_dev,
@@ -289,27 +324,66 @@ void cdc_uart_app_setup(usbd_device* usbd_dev,
     cdc_uart_tx_callback = cdc_tx_cb;
     cdc_uart_rx_callback = cdc_rx_cb;
 
-    cdc_setup(usbd_dev, &cdc_uart_on_host_rx, &cdc_uart_on_host_tx,
-              NULL, &cdc_uart_set_line_coding, &cdc_uart_get_line_coding);
+    cdc_setup(usbd_dev,
+              &cdc_uart_on_host_tx,
+              NULL,
+              &cdc_uart_set_line_coding, &cdc_uart_get_line_coding);
     cmp_usb_register_reset_callback(cdc_uart_app_reset);
 }
 
-bool cdc_uart_app_update(void) {
-    bool active = false;
+void cdc_uart_app_set_timeout(uint32_t timeout_ms) {
+    packet_timeout = timeout_ms;
+}
+
+static bool transfer_complete = false;
+static void cdc_start_in_transfer(void) {
+    transfer_complete = false;
+    if (packet_len < USB_CDC_MAX_PACKET_SIZE) {
+        uint16_t max_bytes = (USB_CDC_MAX_PACKET_SIZE- packet_len);
+        packet_len += console_recv_buffered(&packet_buffer[packet_len], max_bytes);
+    }
+
+    if (packet_len > 0) {
+        if (cdc_send_data(packet_buffer, packet_len)) {
+            transfer_complete = (packet_len < USB_CDC_MAX_PACKET_SIZE);
+            packet_len = console_recv_buffered(packet_buffer, USB_CDC_MAX_PACKET_SIZE);
+            if (cdc_uart_tx_callback) {
+                cdc_uart_tx_callback();
+            }
+        }
+    } else {
+        transfer_complete = true;
+    }
+}
+
+static void cdc_bulk_data_in(usbd_device *usbd_dev, uint8_t ep) {
+    (void)usbd_dev;
+    (void)ep;
 
     if (packet_len < USB_CDC_MAX_PACKET_SIZE) {
         uint16_t max_bytes = (USB_CDC_MAX_PACKET_SIZE- packet_len);
         packet_len += console_recv_buffered(&packet_buffer[packet_len], max_bytes);
     }
 
-    if (packet_len > 0 && cmp_usb_configured()) {
-        if (cdc_send_data(packet_buffer, packet_len)) {
-            active = true;
-            packet_len = 0;
-            if (cdc_uart_tx_callback) {
-                cdc_uart_tx_callback();
-            }
+    if (!transfer_complete) {
+        cdc_send_data(packet_buffer, packet_len);
+        if (packet_len < USB_CDC_MAX_PACKET_SIZE) {
+            transfer_complete = true;
         }
+        packet_len = 0;
+
+        if (cdc_uart_tx_callback) {
+            cdc_uart_tx_callback();
+        }
+    }
+}
+
+bool cdc_uart_app_update() {
+    bool active = false;
+
+    // Handle flow control for data received from the host
+    if (console_send_buffer_space() >= USB_CDC_MAX_PACKET_SIZE) {
+        cdc_clear_nak();
     }
 
     return active;

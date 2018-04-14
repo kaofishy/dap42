@@ -34,6 +34,8 @@
 #include "DAP/CMSIS_DAP_hal.h"
 #include "DFU/DFU.h"
 
+#include "CAN/slcan.h"
+
 #include "tick.h"
 #include "retarget.h"
 #include "console.h"
@@ -108,6 +110,7 @@ int main(void) {
 
     if (CDC_AVAILABLE) {
         cdc_uart_app_setup(usbd_dev, &on_usb_activity, &on_usb_activity);
+        cdc_uart_app_set_timeout(1);
     }
 
     if (VCDC_AVAILABLE) {
@@ -116,6 +119,10 @@ int main(void) {
 
     if (DFU_AVAILABLE) {
         dfu_setup(usbd_dev, &on_dfu_request);
+    }
+
+    if (CAN_RX_AVAILABLE && VCDC_AVAILABLE) {
+        slcan_app_setup(500000, MODE_RESET);
     }
 
     tick_start();
@@ -132,9 +139,14 @@ int main(void) {
             cdc_uart_app_update();
         }
 
+        if (CAN_RX_AVAILABLE && VCDC_AVAILABLE) {
+            slcan_app_update();
+        }
+
         if (VCDC_AVAILABLE) {
             vcdc_app_update();
         }
+
 
         // Handle DAP
         bool dap_active = DAP_app_update();

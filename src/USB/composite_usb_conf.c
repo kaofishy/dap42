@@ -36,6 +36,7 @@
 #include "vcdc.h"
 
 #include "config.h"
+#include "USB/usb_limits.h"
 
 #define NUM_OUT_ENDPOINTS (HIGHEST_OUT_ENDPOINT - 1)
 #define NUM_IN_ENDPOINTS (HIGHEST_IN_ENDPOINT - 0x80 - 1)
@@ -44,6 +45,34 @@
 _Static_assert((1 + NUM_IN_ENDPOINTS <= 8), "Too many IN endpoints for USB core (max 8)");
 _Static_assert((1 + NUM_OUT_ENDPOINTS <= 8), "Too many OUT endpoints for USB core (max 8)");
 
+#define CONTROL_PMA_USAGE 128
+
+#define HID_PMA_USAGE (2*USB_HID_MAX_PACKET_SIZE)
+
+#if CDC_AVAILABLE
+#define CDC_PMA_USAGE (2*USB_CDC_MAX_PACKET_SIZE+16)
+#else
+#define CDC_PMA_USAGE 0
+#endif
+
+#if VCDC_AVAILABLE
+#define VCDC_PMA_USAGE (2*USB_VCDC_MAX_PACKET_SIZE+16)
+#else
+#define VCDC_PMA_USAGE 0
+#endif
+
+#define TOTAL_PMA_USAGE (CONTROL_PMA_USAGE \
+                       + HID_PMA_USAGE \
+                       + CDC_PMA_USAGE \
+                       + VCDC_PMA_USAGE)
+
+#if CAN_RX_AVAILABLE && VCDC_AVAILABLE
+#define MAX_USB_PMA_SIZE USB_PMA_SIZE_WITH_CAN
+#else
+#define MAX_USB_PMA_SIZE USB_PMA_SIZE
+#endif
+
+_Static_assert((TOTAL_PMA_USAGE <= MAX_USB_PMA_SIZE), "USB packet memory area overallocated");
 
 static const struct usb_device_descriptor dev = {
     .bLength = USB_DT_DEVICE_SIZE,
@@ -55,7 +84,7 @@ static const struct usb_device_descriptor dev = {
     .bMaxPacketSize0 = 64,
     .idVendor = 0x1209,
     .idProduct = 0xDA42,
-    .bcdDevice = 0x0110,
+    .bcdDevice = 0x0130,
     .iManufacturer = STR_MANUFACTURER,
     .iProduct = STR_PRODUCT,
     .iSerialNumber = STR_SERIAL,
@@ -389,6 +418,22 @@ void cmp_usb_register_reset_callback(GenericCallback callback) {
     }
 }
 
+static GenericCallback sof_callbacks[USB_MAX_SOF_CALLBACKS];
+static uint8_t num_sof_callbacks;
+
+void cmp_usb_register_sof_callback(GenericCallback callback) {
+    if (num_sof_callbacks < USB_MAX_SOF_CALLBACKS) {
+        sof_callbacks[num_sof_callbacks++] = callback;
+    }
+}
+
+static void cmp_usb_handle_sof(void) {
+    uint8_t i;
+    for (i=0; i < num_sof_callbacks; i++) {
+        (*sof_callbacks[i])();
+    }
+}
+
 /* Configuration status */
 static bool configured = false;
 
@@ -406,6 +451,9 @@ static void cmp_usb_handle_reset(void) {
     for (i=0; i < num_callbacks; i++) {
         (*reset_callbacks[i])();
     }
+
+    // Unregister all SOF callbacks
+    num_sof_callbacks = 0;
 }
 
 /* Class-specific control request handlers */
@@ -496,5 +544,6 @@ usbd_device* cmp_usb_setup(void) {
                                       usbd_control_buffer, sizeof(usbd_control_buffer));
     usbd_register_set_config_callback(usbd_dev, cmp_usb_set_config);
     usbd_register_reset_callback(usbd_dev, cmp_usb_handle_reset);
+    usbd_register_sof_callback(usbd_dev, cmp_usb_handle_sof);
     return usbd_dev;
 }

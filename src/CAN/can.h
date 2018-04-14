@@ -16,22 +16,25 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef CONSOLE_H_INCLUDED
-#define CONSOLE_H_INCLUDED
+#ifndef CAN_H
+#define CAN_H
 
-#include <stddef.h>
-#include <libopencm3/stm32/usart.h>
+#include "can_helper.h"
 
-#include "config.h"
+#define CAN_RX_BUFFER_SIZE 16
 
-extern void console_setup(uint32_t baudrate);
-extern void console_reconfigure(uint32_t baudrate, uint32_t databits,
-                                uint32_t stopbits, uint32_t parity);
+extern bool can_setup(uint32_t baudrate, CanMode mode);
+extern bool can_reconfigure(uint32_t baudrate, CanMode mode);
+extern bool can_read(CAN_Message* msg);
+extern bool can_read_buffer(CAN_Message* msg);
 
-extern void console_send_blocking(uint8_t data);
-extern uint8_t console_recv_blocking(void);
-extern size_t console_send_buffered(const uint8_t* data, size_t num_bytes);
-extern size_t console_recv_buffered(uint8_t* data, size_t max_bytes);
-extern size_t console_send_buffer_space(void);
+extern bool can_write(CAN_Message* msg);
+
+extern bool can_rx_buffer_empty(void);
+extern bool can_rx_buffer_full(void);
+extern void can_rx_buffer_put(const CAN_Message* msg);
+extern void can_rx_buffer_get(CAN_Message* msg);
+extern CAN_Message* can_rx_buffer_peek(void);
+extern void can_rx_buffer_pop(void);
 
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, Devan Lai
+ * Copyright (c) 2016, Devan Lai
  *
  * Permission to use, copy, modify, and/or distribute this software
  * for any purpose with or without fee is hereby granted, provided
@@ -16,22 +16,19 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef CONSOLE_H_INCLUDED
-#define CONSOLE_H_INCLUDED
+#ifndef SLCAN_H_INCLUDED
+#define SLCAN_H_INCLUDED
 
-#include <stddef.h>
-#include <libopencm3/stm32/usart.h>
+#include "can.h"
 
-#include "config.h"
+#define SLCAN_MAX_MESSAGE_LEN 27
 
-extern void console_setup(uint32_t baudrate);
-extern void console_reconfigure(uint32_t baudrate, uint32_t databits,
-                                uint32_t stopbits, uint32_t parity);
+#define SLCAN_OK    '\r'
+#define SLCAN_ERROR '\a'
 
-extern void console_send_blocking(uint8_t data);
-extern uint8_t console_recv_blocking(void);
-extern size_t console_send_buffered(const uint8_t* data, size_t num_bytes);
-extern size_t console_recv_buffered(uint8_t* data, size_t max_bytes);
-extern size_t console_send_buffer_space(void);
+extern bool slcan_output_messages(void);
+extern bool slcan_exec_command(const char* command, size_t len);
+extern void slcan_app_setup(uint32_t baudrate, CanMode mode);
+extern bool slcan_app_update(void);
 
 #endif
